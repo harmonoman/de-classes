@@ -19,15 +19,21 @@ The goal is conceptual clarity, not production-grade engineering — a place to 
 de-classes/
 │
 ├── src/
-│   ├── main.py              # Entry point for quick experiments
-│   ├── api/                 # API ingestion clients
-│   ├── common/              # Shared classes (Logger, base classes, exceptions)
-│   ├── storage/             # S3/MinIO/PostgreSQL abstractions
-│   ├── pipelines/           # ETL/ELT pipeline classes
-│   ├── utils/               # Misc helpers and shared tools
-│   └── configs/             # (Optional) config management
+│   ├── main.py                  # Entry point for quick experiments
+│   ├── api/                     # API ingestion clients
+│   │   └── auth_client.py       # AuthClient: handles API authentication & token refresh
+│   ├── common/                  # Shared classes (Logger, base classes, exceptions)
+│   │   └── logger/
+│   │       └── app_logger.py    # Lightweight centralized logging
+│   ├── storage/                 # S3/MinIO/PostgreSQL abstractions
+│   ├── pipelines/               # ETL/ELT pipeline classes
+│   ├── utils/                   # Misc helpers and shared tools
+│   └── configs/                 # (Optional) config management
 │
-├── tests/                   # Unit tests for each component
+├── dev/                          # Optional dev scripts
+│   └── lambda_auth_simulator.py  # Local Lambda simulation for testing AuthClient
+│
+├── tests/                        # Unit tests for each component
 ├── requirements.txt
 └── README.md
 ```
@@ -58,7 +64,41 @@ logger.info("Starting API ingestion step...")
 logger.error("Failed to connect to endpoint")
 ```
 
-Each component in the repo gets its own namespaced logger automatically, helping you see how logging spreads through a pipeline without getting stuck in configuration complexity.
+## Authentication (AuthClient + Lambda Simulator)
+
+This repo now includes basic authentication tooling for experimenting with API clients that require tokens.
+
+### AuthClient Features
+
+- Automatic token request & refresh
+- Handles token expiration gracefully
+- Returns standard Authorization headers for protected endpoints
+- Simple interface for experimentation with token-based APIs
+
+### Example Usage
+```
+from api.auth_client import AuthClient
+from common.logger.app_logger import AppLogger
+
+logger = AppLogger("my_logger").get_logger()
+
+auth = AuthClient(
+    auth_url="https://your-lambda-url/",  # Replace with your Lambda Function URL
+    username="test_user",
+    password="test_password",
+    logger=logger
+)
+
+token = auth.get_token()
+print("Token:", token)
+```
+
+### Lambda Auth Simulator
+For local testing, a fake auth API is provided in dev/lambda_auth_simulator.py:
+
+- Simulates a /login endpoint returning access_token and expires_in
+- Provides a /data protected endpoint that checks Authorization headers
+- Can be deployed as a Lambda Function URL for integration testing
 
 ## How This Repo Works
 
@@ -72,6 +112,7 @@ Classes are designed to be:
 
 ### Example flow:
 
+- `AuthClient` → fetches tokens from API
 - `ApiClient` → fetches data
 - `StorageClient` → writes to S3 / Minio / Postgres
 - `Pipeline` → coordinates extract → transform → load
@@ -93,6 +134,12 @@ The purpose is to visualize how all these moving pieces interact.
 3. Run the project
 `python src/main.py`
 
+4. Optionally, test AuthClient with the Lambda simulator:
+
+- Deploy `dev/lambda_auth_simulator.py` as an AWS Lambda function with a Function URL.
+- Point your `AuthClient`'s `auth_url` to that URL to simulate login and protected endpoints.
+- Alternatively, you can write a small local test script that calls `lambda_handler(event, context)` directly with mock `event` dictionaries for `/login` and `/data`.
+
 ## Future Ideas
 
 - API client with rate-limiting & retries
@@ -103,14 +150,4 @@ The purpose is to visualize how all these moving pieces interact.
 - Config injection system
 - Logging mixins for pipelines
 - Random number generator API client (for testing ingestion flows)
-
-## Branch: project-setup
-
-This branch establishes:
-
-- the initial class-based structure
-- logging as a clean, isolated component
-- folder layout for future DE objects
-
-It serves as the foundation for all future components and experiments.
-
+- Authentication flows with refresh tokens and JWTs

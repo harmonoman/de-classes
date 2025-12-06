@@ -19,54 +19,61 @@ The goal is conceptual clarity, not production-grade engineering — a place to 
 de-classes/
 │
 ├── src/
-│   ├── main.py                  # Entry point for quick experiments
-│   ├── api/                     # API ingestion clients
-│   │   └── auth_client.py       # AuthClient: handles API authentication & token refresh
-│   ├── common/                  # Shared classes (Logger, base classes, exceptions)
+│   ├── main.py                        # Entry point for quick experiments
+│
+│   ├── api/
+│   │   ├── auth_client.py             # AuthClient: token-based API authentication
+│   │   ├── unstable_api_client.py     # Client w/ retries, backoff, pagination for unstable APIs
+│   │   └── api_data_service.py        # High-level ingestion: fetches all pages to DF or storage
+│
+│   ├── common/
 │   │   └── logger/
-│   │       └── app_logger.py    # Lightweight centralized logging
-│   ├── storage/                 # S3/MinIO/PostgreSQL abstractions
-│   ├── pipelines/               # ETL/ELT pipeline classes
-│   ├── utils/                   # Misc helpers and shared tools
-│   └── configs/                 # (Optional) config management
+│   │       └── app_logger.py          # Lightweight centralized logging utility
 │
-├── dev/                          # Optional dev scripts
-│   └── lambda_auth_simulator.py  # Local Lambda simulation for testing AuthClient
+│   ├── storage/
+│   │   ├── clients/                   # S3, MinIO, and base storage clients
+│   │   ├── services/                  # High-level DataFrame upload/download orchestration
+│   │   └── format/                    # CSV/JSON/Parquet serialization helpers
 │
-├── tests/                        # Unit tests for each component
+│   ├── pipelines/                     # ETL/ELT pipeline classes
+│   ├── utils/                         # Shared utilities
+│   └── configs/                       # Optional config management
+│
+├── dev/
+│   ├── lambda_auth_simulator.py       # Auth + protected endpoint simulator
+│   └── unstable_api_simulator.py      # New: unstable API simulator w/ 429, 500, jittery failures
+│
+├── tests/                             # Tests for API, storage, and pipeline components
 ├── requirements.txt
 └── README.md
 ```
 
 ## Logging Design (Simple, Code-Based)
 
-Logging is intentionally lightweight, centralized, and self-contained.
-
-Instead of introducing external config files (YAML, JSON, etc.), logging is configured in pure Python using the `AppLogger` class in `src/common/logger/app_logger.py`.
+Logging is lightweight, centralized, and fully Pythonic — no YAML or heavy config systems.
 
 ### AppLogger Features
 
 - Console logs (DEBUG+)
 - Rotating file logs (ERROR+)
-- Human-readable and JSON-like formats
-- Automatic creation of a `logs/` directory
-- Prevention of duplicate handlers on repeated imports
-- A simple, unified interface for all application components
+- Consistent, readable formatting
+- Auto-created logs/ directory
+- No duplicate handlers on re-import
+- Plug-and-play for all modules
 
 ### Example Usage
 
 ```
-from common.app_logger import AppLogger
+from common.logger.app_logger import AppLogger
+logger = AppLogger("demo").get_logger()
 
-logger = AppLogger(__name__).get_logger()
-
-logger.info("Starting API ingestion step...")
-logger.error("Failed to connect to endpoint")
+logger.info("Starting an ingestion task...")
+logger.error("Something went wrong")
 ```
 
 ## Authentication (AuthClient + Lambda Simulator)
 
-This repo now includes basic authentication tooling for experimenting with API clients that require tokens.
+The repo includes a fully self-contained authentication stack for simulating token-based APIs.
 
 ### AuthClient Features
 
@@ -80,10 +87,10 @@ This repo now includes basic authentication tooling for experimenting with API c
 from api.auth_client import AuthClient
 from common.logger.app_logger import AppLogger
 
-logger = AppLogger("my_logger").get_logger()
+logger = AppLogger("auth_test").get_logger()
 
 auth = AuthClient(
-    auth_url="https://your-lambda-url/",  # Replace with your Lambda Function URL
+    auth_url="https://your-lambda-url/login",
     username="test_user",
     password="test_password",
     logger=logger
@@ -93,27 +100,82 @@ token = auth.get_token()
 print("Token:", token)
 ```
 
-### Lambda Auth Simulator
-For local testing, a fake auth API is provided in dev/lambda_auth_simulator.py:
+### Lambda Auth Simulator (`dev/lambda_auth_simulator.py`)
 
-- Simulates a /login endpoint returning access_token and expires_in
-- Provides a /data protected endpoint that checks Authorization headers
-- Can be deployed as a Lambda Function URL for integration testing
+For local testing, a fake auth API is provided in `dev/lambda_auth_simulator.py`:
+
+- `/login` — returns `access_token` + `expires_in`
+- `/data` — checks `Authorization: Bearer <token>`
+- Useful for testing `AuthClient` without real API dependencies
+
+## Unstable API Ingestion
+(`unstable_api_client.py` + `unstable_api_simulator.py`)
+
+This module pair simulates a chaotic real-world service and a client designed to survive it.
+
+### `unstable_api_simulator.py` Features
+
+- Random 500, 503, and 429 failures
+- Random jitter
+- Pagination with total_pages
+- Token-required /data endpoint
+- Configurable fail rates
+
+### UnstableAPIClient Features
+
+- Automatic retry w/ exponential backoff
+- Optional jitter
+- Handles:
+    * 429 (rate limit)
+    * 500/503 (server failure)
+    * network-level errors
+- Tracks:
+    * retry_count
+    * successful_pages
+    * failed_pages
+    * records_ingested
+- Clean generator interface:
+`for page_num, result in api_client.iterate_all_pages(limit=100):`
+
+## High-Level API Ingestion
+`api_data_service.py`
+
+A service layer that converts paginated API responses into either:
+
+- a DataFrame, or
+- uploaded artifacts in S3/MinIO.
+
+### Features
+
+- Fetch all pages with reuse of `UnstableAPIClient`
+- Safe handling of empty pages or retries
+- Concatenates into a unified DataFrame
+- Uploads as CSV, JSON, or Parquet via StorageDataService
+
+### Example
+```
+df = data_service.fetch_all_to_df(limit=100)
+data_service.fetch_all_to_storage(
+    bucket="raw",
+    key="unstable_data.csv",
+    format="csv"
+)
+```
 
 ## Storage Architecture
 
-The repo now includes fully modular storage abstractions to handle uploading and downloading structured data with pandas DataFrames.
+A modular set of clients designed to show how storage layers fit into an ETL workflow.
 
 ### Storage Clients
 
-- BaseS3Client – low-level S3-compatible client (AWS S3 or MinIO)
-- S3Client – AWS S3 specialization with optional session/profile handling
-- MinioClient – MinIO specialization with bucket management helpers
+- `BaseS3Client` – low-level S3-compatible client (AWS S3 or MinIO)
+- `S3Client` – AWS S3 specialization with optional session/profile handling
+- `MinioClient` – MinIO specialization with bucket management helpers
 
 ### Data Services
 
-- StorageDataService – orchestrates storing and retrieving DataFrames in S3/MinIO
-- DataFormatService – converts DataFrames to/from CSV, JSON, and Parquet bytes
+- `StorageDataService` – orchestrates storing and retrieving DataFrames in S3/MinIO
+- `DataFormatService` – converts DataFrames to/from CSV, JSON, and Parquet bytes
 
 ### Example Usage
 ```
@@ -146,11 +208,12 @@ Classes are designed to be:
 
 ### Example flow:
 
-- `AuthClient` → fetches tokens from API
-- `StorageClient` → handles low-level byte operations
-- `DataFormatService` → handles serialization/deserialization
-- `StorageDataService` → high-level DataFrame orchestration
-- `AppLogger` → provides structured, centralized logging
+`AuthClient` → retrieves and refreshes tokens  
+`UnstableAPIClient` → pulls pages w/ retries and jitter  
+`ApiDataService` → collects into a DataFrame  
+`DataFormatService` → converts to bytes  
+`StorageDataService` → uploads to MinIO or S3  
+`AppLogger` → logs every step consistently
 
 The purpose is to visualize how all these moving pieces interact.
 
@@ -168,17 +231,16 @@ The purpose is to visualize how all these moving pieces interact.
 3. Run the project
 `python src/main.py`
 
-4. Optionally, test AuthClient with the Lambda simulator:
+4. (Optional) Test authentication or unstable API behavior
 
-- Deploy `dev/lambda_auth_simulator.py` as an AWS Lambda function with a Function URL.
-- Point your `AuthClient`'s `auth_url` to that URL to simulate login and protected endpoints.
-- Alternatively, you can write a small local test script that calls `lambda_handler(event, context)` directly with mock `event` dictionaries for `/login` and `/data`.
+- Deploy the Lambda simulators (`dev/`)
+- Or call their `lambda_handler()` functions locally with mock request events
 
 ## Future Ideas
 
-- Extend storage clients to Postgres or other DBs
-- ETL pipeline abstractions
-- MinIO → Postgres loaders
+- PostgreSQL storage + loaders
+- More complete ETL pipelines
 - Config injection system
+- Pluggable transformations
 - Logging mixins for pipelines
 - Object storage orchestration layer

@@ -1,6 +1,7 @@
 import requests
 from src.common.logger.app_logger import AppLogger
 from src.api.auth_client import AuthClient
+from tests.test_storage import test_storage
 
 
 def main():
@@ -24,6 +25,8 @@ def main():
     )
     print(response.status_code)
     print(response.json())
+
+    test_storage(logger)
 
 
 if __name__ == '__main__':

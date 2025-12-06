@@ -2,7 +2,7 @@
 
 A playground for building interconnected, object-oriented data engineering components.
 
-This repo provides a clean, modular environment for experimenting with reusable ETL/ELT workflows, API wrappers, storage clients, pipeline orchestration, and other data engineering abstractions — all using simple, surface-level class design that keeps concepts clear and understandable.
+This repo provides a clean, modular environment for experimenting with reusable ETL/ELT workflows, storage clients, pipeline orchestration, and other data engineering abstractions — all using simple, surface-level class design that keeps concepts clear and understandable.
 
 ## Project Goals
 
@@ -100,6 +100,40 @@ For local testing, a fake auth API is provided in dev/lambda_auth_simulator.py:
 - Provides a /data protected endpoint that checks Authorization headers
 - Can be deployed as a Lambda Function URL for integration testing
 
+## Storage Architecture
+
+The repo now includes fully modular storage abstractions to handle uploading and downloading structured data with pandas DataFrames.
+
+### Storage Clients
+
+- BaseS3Client – low-level S3-compatible client (AWS S3 or MinIO)
+- S3Client – AWS S3 specialization with optional session/profile handling
+- MinioClient – MinIO specialization with bucket management helpers
+
+### Data Services
+
+- StorageDataService – orchestrates storing and retrieving DataFrames in S3/MinIO
+- DataFormatService – converts DataFrames to/from CSV, JSON, and Parquet bytes
+
+### Example Usage
+```
+from storage.clients.s3_client import S3Client
+from storage.services import StorageDataService
+from storage.format import DataFormatService
+from common.logger.app_logger import AppLogger
+import pandas as pd
+
+logger = AppLogger("storage_test").get_logger()
+
+s3 = S3Client(logger, access_key="your_key", secret_key="your_secret")
+fmt = DataFormatService()
+storage = StorageDataService(s3, fmt, logger)
+
+df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+storage.upload_df(df, bucket="my-bucket", key="test.csv", format="csv")
+downloaded_df = storage.download_df("my-bucket", "test.csv", format="csv")
+```
+
 ## How This Repo Works
 
 Each directory represents a distinct portion of a data engineering system.
@@ -113,9 +147,9 @@ Classes are designed to be:
 ### Example flow:
 
 - `AuthClient` → fetches tokens from API
-- `ApiClient` → fetches data
-- `StorageClient` → writes to S3 / Minio / Postgres
-- `Pipeline` → coordinates extract → transform → load
+- `StorageClient` → handles low-level byte operations
+- `DataFormatService` → handles serialization/deserialization
+- `StorageDataService` → high-level DataFrame orchestration
 - `AppLogger` → provides structured, centralized logging
 
 The purpose is to visualize how all these moving pieces interact.
@@ -142,12 +176,9 @@ The purpose is to visualize how all these moving pieces interact.
 
 ## Future Ideas
 
-- API client with rate-limiting & retries
-- Base ETL pipeline class
-- Postgres → S3 or MinIO sync
-- MinIO → Postgres loader
-- Object storage abstraction layer
+- Extend storage clients to Postgres or other DBs
+- ETL pipeline abstractions
+- MinIO → Postgres loaders
 - Config injection system
 - Logging mixins for pipelines
-- Random number generator API client (for testing ingestion flows)
-- Authentication flows with refresh tokens and JWTs
+- Object storage orchestration layer
